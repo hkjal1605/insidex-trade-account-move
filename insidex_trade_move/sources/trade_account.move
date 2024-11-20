@@ -4,7 +4,7 @@ module insidex_trade::trade_account {
 
     use insidex_trade::config::{Self, Config};
 
-    const EAmountMoreThanAssetBalance: u64 = 1;
+    const EAmountMoreThanAssetBalance: u64 = 4;
 
     public struct TradeAsset<phantom C> has key {
         id: UID,
@@ -12,7 +12,9 @@ module insidex_trade::trade_account {
         balance: Balance<C>,
     }
 
-    public fun deposit_new_asset<C>(multisig_address: address, coin: Coin<C>, tradeConfig: &Config, ctx: &mut TxContext): ID {
+    public(package) fun deposit_new_asset<C>(multisig_address: address, coin: Coin<C>, trade_config: &Config, ctx: &mut TxContext): ID {
+        config::assert_interacting_with_most_up_to_date_package(trade_config);
+
         let user_address = tx_context::sender(ctx);
         let balance_to_deposit = coin::into_balance(coin);
 
@@ -31,16 +33,38 @@ module insidex_trade::trade_account {
     }
 
     #[allow(unused_variable)]
-    public fun deposit_existing_asset<C>(coin: Coin<C>, trade_asset: &mut TradeAsset<C>, ctx: &mut TxContext) {
+    public(package) fun deposit_existing_asset<C>(coin: Coin<C>, trade_asset: &mut TradeAsset<C>, trade_config: &Config) {
+        config::assert_interacting_with_most_up_to_date_package(trade_config);
+
         let balance_to_deposit = coin::into_balance(coin);
-        
         let mut_current_balance = &mut trade_asset.balance;
 
         balance::join(mut_current_balance, balance_to_deposit);
     }
 
     #[allow(lint(self_transfer))]
-    public fun withdraw_all_asset<C>(trade_asset: &mut TradeAsset<C>, ctx: &mut TxContext): u64 {
+    public(package) fun withdraw_asset<C>(trade_asset: &mut TradeAsset<C>, amount: u64, trade_config: &Config, ctx: &mut TxContext) {
+        config::assert_interacting_with_most_up_to_date_package(trade_config);
+        config::assert_address_is_not_trading_manager(tx_context::sender(ctx), trade_config);
+
+        let asset_balance = &mut trade_asset.balance;
+        let asset_balance_value = balance::value(asset_balance);
+
+        // Assert that amount is less than or equal to asset_balance_value
+        assert!(amount <= asset_balance_value, EAmountMoreThanAssetBalance);
+
+        // Split the required balance
+        let required_balance = balance::split(asset_balance, amount);
+        let coin_to_transfer = coin::from_balance(required_balance, ctx);
+
+        transfer::public_transfer(coin_to_transfer, tx_context::sender(ctx));
+    }
+
+    #[allow(lint(self_transfer))]
+    public(package) fun withdraw_all_asset<C>(trade_asset: &mut TradeAsset<C>, trade_config: &Config, ctx: &mut TxContext): u64 {
+        config::assert_interacting_with_most_up_to_date_package(trade_config);
+        config::assert_address_is_not_trading_manager(tx_context::sender(ctx), trade_config);
+
         let TradeAsset {
             id: _id,
             user: _user,
@@ -57,7 +81,10 @@ module insidex_trade::trade_account {
         coin_value
     }
 
-    public fun borrow_asset_for_trading<C>(trade_asset: &mut TradeAsset<C>, amount: u64, ctx: &mut TxContext): Coin<C> {
+    public(package) fun borrow_asset_for_trading<C>(trade_asset: &mut TradeAsset<C>, amount: u64, trade_config: &Config, ctx: &mut TxContext): Coin<C> {
+        config::assert_interacting_with_most_up_to_date_package(trade_config);
+        config::assert_address_is_trading_manager(tx_context::sender(ctx), trade_config);
+
         let asset_balance = &mut trade_asset.balance;
         let asset_balance_value = balance::value(asset_balance);
 
@@ -71,7 +98,10 @@ module insidex_trade::trade_account {
         coin_to_return
     }
 
-    public fun deposit_new_asset_as_trading_manager<C>(user_address: address, multisig_address: address, coin: Coin<C>, tradeConfig: &Config, ctx: &mut TxContext): ID {
+    public(package) fun deposit_new_asset_as_trading_manager<C>(user_address: address, multisig_address: address, coin: Coin<C>, trade_config: &Config, ctx: &mut TxContext): ID {
+        config::assert_interacting_with_most_up_to_date_package(trade_config);
+        config::assert_address_is_trading_manager(tx_context::sender(ctx), trade_config);
+
         let balance_to_deposit = coin::into_balance(coin);
 
         let trade_asset = TradeAsset {
