@@ -1,0 +1,11 @@
+[package]
+name = "InsidexTrade"
+version = "0.0.1"
+edition = "2024.beta"
+published-at = ""
+
+[dependencies]
+Sui = { git = "https://github.com/MystenLabs/sui.git", subdir = "crates/sui-framework/packages/sui-framework", rev = "framework/mainnet", override = true }
+
+[addresses]
+insidex_trade = "0x0"
