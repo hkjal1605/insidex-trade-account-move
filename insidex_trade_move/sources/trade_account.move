@@ -1,10 +1,14 @@
 module insidex_trade::trade_account {
     use sui::balance::{Self, Balance};
     use sui::coin::{Self, Coin};
+    use std::type_name::{Self, TypeName};
 
-    use insidex_trade::config::{Self, Config};
+    use insidex_trade::config::{Self, Config, TradingManagerCap};
 
     const EAmountMoreThanAssetBalance: u64 = 4;
+    const ETradeAssetNotBelongsToUser: u64 = 5;
+    const EPromiseAndUserMismatch: u64 = 6;
+    const EPromiseAndCoinTypeMismatch: u64 = 7;
 
     public struct TradeAsset<phantom C> has key {
         id: UID,
@@ -12,7 +16,17 @@ module insidex_trade::trade_account {
         balance: Balance<C>,
     }
 
-    public(package) fun deposit_new_asset<C>(multisig_address: address, coin: Coin<C>, trade_config: &Config, ctx: &mut TxContext): ID {
+    public struct Promise {
+        // ensure the funds are deposited to the same user's accounts
+        user: address,
+        borrowed_for: TypeName
+    }
+
+    public(package) fun assert_trade_asset_belongs_to_user<C>(user: address, trade_asset: &TradeAsset<C>) {
+        assert!(trade_asset.user == user, ETradeAssetNotBelongsToUser);
+    }
+
+    public(package) fun deposit_new_asset<C>(coin: Coin<C>, trade_config: &Config, ctx: &mut TxContext): ID {
         config::assert_interacting_with_most_up_to_date_package(trade_config);
 
         let user_address = tx_context::sender(ctx);
@@ -26,14 +40,14 @@ module insidex_trade::trade_account {
 
         let asset_id = object::id(&trade_asset);
 
-        // Transfer the trade_asset to the multisig account
-        transfer::transfer(trade_asset, multisig_address);
+        transfer::share_object(trade_asset);
 
         asset_id
     }
 
-    #[allow(unused_variable)]
-    public(package) fun deposit_existing_asset<C>(coin: Coin<C>, trade_asset: &mut TradeAsset<C>, trade_config: &Config) {
+    #[allow(unused_mut_parameter)]
+    public(package) fun deposit_existing_asset<C>(coin: Coin<C>, trade_asset: &mut TradeAsset<C>, trade_config: &Config, ctx: &mut TxContext) {
+        assert_trade_asset_belongs_to_user<C>(tx_context::sender(ctx), trade_asset);
         config::assert_interacting_with_most_up_to_date_package(trade_config);
 
         let balance_to_deposit = coin::into_balance(coin);
@@ -46,6 +60,7 @@ module insidex_trade::trade_account {
     public(package) fun withdraw_asset<C>(trade_asset: &mut TradeAsset<C>, amount: u64, trade_config: &Config, ctx: &mut TxContext) {
         config::assert_interacting_with_most_up_to_date_package(trade_config);
         config::assert_address_is_not_trading_manager(tx_context::sender(ctx), trade_config);
+        assert_trade_asset_belongs_to_user<C>(tx_context::sender(ctx), trade_asset);
 
         let asset_balance = &mut trade_asset.balance;
         let asset_balance_value = balance::value(asset_balance);
@@ -60,30 +75,18 @@ module insidex_trade::trade_account {
         transfer::public_transfer(coin_to_transfer, tx_context::sender(ctx));
     }
 
-    #[allow(lint(self_transfer))]
-    public(package) fun withdraw_all_asset<C>(trade_asset: &mut TradeAsset<C>, trade_config: &Config, ctx: &mut TxContext): u64 {
+    public(package) fun borrow_asset_for_trading<C, D>(
+        trading_manager_cap: &TradingManagerCap,
+        trade_asset: &mut TradeAsset<C>, 
+        amount: u64, 
+        user_address: address, 
+        trade_config: &Config, 
+        ctx: &mut TxContext
+    ): (Coin<C>, Promise) {
         config::assert_interacting_with_most_up_to_date_package(trade_config);
-        config::assert_address_is_not_trading_manager(tx_context::sender(ctx), trade_config);
+        config::assert_address_is_trading_manager(trading_manager_cap, trade_config, ctx);
 
-        let TradeAsset {
-            id: _id,
-            user: _user,
-            balance: current_balance
-        } = trade_asset;
-
-        let balance_to_transfer = balance::withdraw_all(current_balance);
-        let coin_to_transfer = coin::from_balance(balance_to_transfer, ctx);
-
-        let coin_value = coin::value(&coin_to_transfer);
-
-        transfer::public_transfer(coin_to_transfer, tx_context::sender(ctx));
-
-        coin_value
-    }
-
-    public(package) fun borrow_asset_for_trading<C>(trade_asset: &mut TradeAsset<C>, amount: u64, trade_config: &Config, ctx: &mut TxContext): Coin<C> {
-        config::assert_interacting_with_most_up_to_date_package(trade_config);
-        config::assert_address_is_trading_manager(tx_context::sender(ctx), trade_config);
+        assert_trade_asset_belongs_to_user<C>(user_address, trade_asset);
 
         let asset_balance = &mut trade_asset.balance;
         let asset_balance_value = balance::value(asset_balance);
@@ -95,12 +98,28 @@ module insidex_trade::trade_account {
         let required_balance = balance::split(asset_balance, amount);
         let coin_to_return = coin::from_balance(required_balance, ctx);
 
-        coin_to_return
+        let promise = Promise {
+            user: user_address,
+            borrowed_for: type_name::get<D>()
+        };
+
+        (coin_to_return, promise)
     }
 
-    public(package) fun deposit_new_asset_as_trading_manager<C>(user_address: address, multisig_address: address, coin: Coin<C>, trade_config: &Config, ctx: &mut TxContext): ID {
+    public(package) fun deposit_new_asset_as_trading_manager<C>(
+        trading_manager_cap: &TradingManagerCap,
+        user_address: address, 
+        coin: Coin<C>, 
+        trade_config: &Config, 
+        promise: Promise, 
+        ctx: &mut TxContext
+    ): ID {
         config::assert_interacting_with_most_up_to_date_package(trade_config);
-        config::assert_address_is_trading_manager(tx_context::sender(ctx), trade_config);
+        config::assert_address_is_trading_manager(trading_manager_cap, trade_config, ctx);
+
+        let Promise { user, borrowed_for } = promise;
+        assert!(user == user_address, EPromiseAndUserMismatch);
+        assert!(borrowed_for == type_name::get<C>(), EPromiseAndCoinTypeMismatch);
 
         let balance_to_deposit = coin::into_balance(coin);
 
@@ -113,8 +132,29 @@ module insidex_trade::trade_account {
         let asset_id = object::id(&trade_asset);
 
         // Transfer the trade_asset to the multisig account
-        transfer::transfer(trade_asset, multisig_address);
+        transfer::share_object(trade_asset);
 
         asset_id
+    }
+
+    public(package) fun deposit_existing_asset_as_trading_manager<C>(
+        trading_manager_cap: &TradingManagerCap,
+        coin: Coin<C>, 
+        trade_asset: &mut TradeAsset<C>, 
+        user_address: address, 
+        trade_config: &Config, 
+        promise: Promise, 
+        ctx: &mut TxContext
+    ) {
+        config::assert_interacting_with_most_up_to_date_package(trade_config);
+        config::assert_address_is_trading_manager(trading_manager_cap, trade_config, ctx);
+
+        assert_trade_asset_belongs_to_user<C>(user_address, trade_asset);
+
+        let Promise { user, borrowed_for } = promise;
+        assert!(user == user_address, EPromiseAndUserMismatch);
+        assert!(borrowed_for == type_name::get<C>(), EPromiseAndCoinTypeMismatch);
+
+        deposit_existing_asset<C>(coin, trade_asset, trade_config, ctx);
     }
 }

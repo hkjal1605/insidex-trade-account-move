@@ -16,16 +16,19 @@ module insidex_trade::config {
         trading_manager: address
     }
 
-    public fun trading_manager_address(config: &Config): address {
-        config.trading_manager
+
+    public struct TradingManagerCap has key, store {
+        id: UID,
+        trading_manager: address
     }
 
     public fun assert_interacting_with_most_up_to_date_package(config: &Config) {
         assert!(config.version == 1, ENotLatestVersion);
     }
 
-    public fun assert_address_is_trading_manager(user: address, config: &Config) {
-        assert!(config.trading_manager == user, EAddressIsNotTradingManager)
+    public fun assert_address_is_trading_manager(trading_manager_cap: &TradingManagerCap, config: &Config, ctx: &mut TxContext) {
+        assert!(trading_manager_cap.trading_manager == tx_context::sender(ctx), EAddressIsNotTradingManager);
+        assert!(config.trading_manager == tx_context::sender(ctx), EAddressIsNotTradingManager);
     }
 
     public fun assert_address_is_not_trading_manager(user: address, config: &Config) {
@@ -37,7 +40,7 @@ module insidex_trade::config {
 
         let config = Config{
             id: object::new(ctx), 
-            version: 1, 
+            version: 1,
             trading_manager: tx_context::sender(ctx),
         };
 
@@ -48,22 +51,16 @@ module insidex_trade::config {
         create_config(&otw, ctx);
     }
     
-    public fun update_trading_manager_address(_admin_cap: &AdminCap, config: &mut Config, trading_manager_address: address) {
+    public fun assign_trading_manager(_admin_cap: &AdminCap, config: &mut Config, trading_manager_address: address, ctx: &mut TxContext) {
         assert_interacting_with_most_up_to_date_package(config);
+
         config.trading_manager = trading_manager_address;
+        
+        let trading_manager_cap = TradingManagerCap{
+            id: object::new(ctx),
+            trading_manager: trading_manager_address,
+        };
+
+        transfer::transfer(trading_manager_cap, trading_manager_address);
     }
-
-    // public fun derive_multisig_address(config: &Config, user_pk: vector<u8>): address {
-    //     assert_interacting_with_most_up_to_date_package(config);
-    //     let mut multisig_vec = b"";
-
-    //     0x1::vector::push_back<u8>(&mut multisig_vec, 3);
-    //     0x1::vector::append<u8>(&mut multisig_vec, x"0100");
-    //     0x1::vector::append<u8>(&mut multisig_vec, config.insidex_pk);
-    //     0x1::vector::push_back<u8>(&mut multisig_vec, 1);
-    //     0x1::vector::append<u8>(&mut multisig_vec, user_pk);
-    //     0x1::vector::push_back<u8>(&mut multisig_vec, 1);
-
-    //     0x2::address::from_bytes(0x2::hash::blake2b256(&multisig_vec))
-    // }
 }

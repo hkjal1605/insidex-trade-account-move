@@ -20,10 +20,10 @@ module insidex_trade::user_actions {
         coin: TypeName
     }
 
-    public entry fun deposit_new_asset_entry<C>(multisig_address: address, coin: Coin<C>, tradeConfig: &Config, ctx: &mut TxContext) {
+    public entry fun deposit_new_asset_entry<C>(coin: Coin<C>, tradeConfig: &Config, ctx: &mut TxContext) {
         let coin_amount = coin::value(&coin);
 
-        let asset_id = trade_account::deposit_new_asset<C>(multisig_address, coin, tradeConfig, ctx);
+        let asset_id = trade_account::deposit_new_asset<C>(coin, tradeConfig, ctx);
 
         let asset_deposited_event = AssetDepositedEvent {
             asset_id: asset_id,
@@ -40,7 +40,7 @@ module insidex_trade::user_actions {
         let coin_amount = coin::value(&coin);
         let asset_id = object::id(trade_asset);
 
-        trade_account::deposit_existing_asset<C>(coin, trade_asset, trade_config);
+        trade_account::deposit_existing_asset<C>(coin, trade_asset, trade_config, ctx);
 
         let asset_deposited_event = AssetDepositedEvent {
             asset_id: asset_id,
@@ -55,20 +55,6 @@ module insidex_trade::user_actions {
         let asset_id = object::id(trade_asset);
 
         trade_account::withdraw_asset<C>(trade_asset, amount, trade_config, ctx);
-
-        let asset_withdrawn_event = AssetWithdrawnEvent {
-            asset_id: asset_id,
-            amount: amount,
-            user: tx_context::sender(ctx),
-            coin: type_name::get<C>()
-        };
-        event::emit<AssetWithdrawnEvent>(asset_withdrawn_event);
-    }
-
-    public entry fun withdraw_all_assets_entry<C>(trade_asset: &mut TradeAsset<C>, trade_config: &Config, ctx: &mut TxContext) {
-        let asset_id = object::id(trade_asset);
-
-        let amount = trade_account::withdraw_all_asset<C>(trade_asset, trade_config, ctx);
 
         let asset_withdrawn_event = AssetWithdrawnEvent {
             asset_id: asset_id,
