@@ -46,8 +46,7 @@ module insidex_trade::trade_account {
     }
 
     #[allow(unused_mut_parameter)]
-    public(package) fun deposit_existing_asset<C>(coin: Coin<C>, trade_asset: &mut TradeAsset<C>, trade_config: &Config, ctx: &mut TxContext) {
-        assert_trade_asset_belongs_to_user<C>(tx_context::sender(ctx), trade_asset);
+    public(package) fun deposit_existing_asset<C>(coin: Coin<C>, trade_asset: &mut TradeAsset<C>, trade_config: &Config) {
         config::assert_interacting_with_most_up_to_date_package(trade_config);
 
         let balance_to_deposit = coin::into_balance(coin);
@@ -155,6 +154,6 @@ module insidex_trade::trade_account {
         assert!(user == user_address, EPromiseAndUserMismatch);
         assert!(borrowed_for == type_name::get<C>(), EPromiseAndCoinTypeMismatch);
 
-        deposit_existing_asset<C>(coin, trade_asset, trade_config, ctx);
+        deposit_existing_asset<C>(coin, trade_asset, trade_config);
     }
 }

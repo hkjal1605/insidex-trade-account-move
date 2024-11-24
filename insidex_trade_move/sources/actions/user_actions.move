@@ -36,11 +36,12 @@ module insidex_trade::user_actions {
 
     public entry fun deposit_existing_asset_entry<C>(coin: Coin<C>, trade_asset: &mut TradeAsset<C>, trade_config: &Config, ctx: &mut TxContext) {
         config::assert_address_is_not_trading_manager(tx_context::sender(ctx), trade_config);
+        trade_account::assert_trade_asset_belongs_to_user<C>(tx_context::sender(ctx), trade_asset);
 
         let coin_amount = coin::value(&coin);
         let asset_id = object::id(trade_asset);
 
-        trade_account::deposit_existing_asset<C>(coin, trade_asset, trade_config, ctx);
+        trade_account::deposit_existing_asset<C>(coin, trade_asset, trade_config);
 
         let asset_deposited_event = AssetDepositedEvent {
             asset_id: asset_id,
