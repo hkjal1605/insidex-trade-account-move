@@ -94,9 +94,17 @@ module insidex_trade::limit_orders {
         config::assert_interacting_with_most_up_to_date_package(trade_config);
         assert_limit_order_belongs_to_user<BaseAsset, QuoteAsset>(limit_order, tx_context::sender(ctx));
 
-        limit_order.target_price_limit_buy = target_price_limit_buy;
-        limit_order.target_price_take_profit = target_price_take_profit;
-        limit_order.target_price_stop_loss = target_price_stop_loss;
+        if (option::is_some(target_price_limit_buy)) {
+            limit_order.target_price_limit_buy = target_price_limit_buy;
+        }
+
+        if (option::is_some(target_price_take_profit)) {
+            limit_order.target_price_take_profit = target_price_take_profit;
+        }
+
+        if (option::is_some(target_price_stop_loss)) {
+            limit_order.target_price_stop_loss = target_price_stop_loss;
+        }
 
         limit_order.updated_at = clock::timestamp_ms(clock);
     }
