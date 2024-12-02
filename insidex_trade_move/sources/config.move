@@ -1,5 +1,7 @@
 module insidex_trade::config {
     use sui::types;
+    use std::type_name::{TypeName};
+    use sui::dynamic_field::{Self as df};
     
     use insidex_trade::app::{AdminCap};
 
@@ -7,6 +9,10 @@ module insidex_trade::config {
     const EAddressIsNotTradingManager: u64 = 1;
     const EAddressIsTradingManager: u64 = 2;
     const ETypeNotOneTimeWitness: u64 = 3;
+    const EQuoteAssetNotAllowedForLimitOrder: u64 = 4;
+    const EDfNotExists: u64 = 5;
+
+    const AllowedQuoteCoinTypesFieldName: vector<u8> = b"allowed_quote_coin_types";
 
     public struct CONFIG has drop {}
 
@@ -15,7 +21,6 @@ module insidex_trade::config {
         version: u64,
         trading_manager: address
     }
-
 
     public struct TradingManagerCap has key, store {
         id: UID,
@@ -62,5 +67,50 @@ module insidex_trade::config {
         };
 
         transfer::transfer(trading_manager_cap, trading_manager_address);
+    }
+
+    public fun add_allowed_quote_asset_for_limit_order(
+        _admin_cap: &AdminCap,
+        config: &mut Config,
+        coin_type: TypeName
+    ) {
+        assert_interacting_with_most_up_to_date_package(config);
+
+        let df_exists = df::exists_(&config.id, AllowedQuoteCoinTypesFieldName);
+
+        if(!df_exists) {
+            df::add(&mut config.id, AllowedQuoteCoinTypesFieldName, vector::empty<TypeName>());
+        };
+
+        let coin_types_vector = df::borrow_mut(&mut config.id, AllowedQuoteCoinTypesFieldName);
+        vector::push_back(coin_types_vector, coin_type);
+    }
+
+    public fun remove_allowed_quote_asset_for_limit_order(
+        _admin_cap: &AdminCap,
+        config: &mut Config,
+        coin_type: TypeName
+    ) {
+        assert_interacting_with_most_up_to_date_package(config);
+
+        let df_exists = df::exists_(&config.id, AllowedQuoteCoinTypesFieldName);
+        assert!(df_exists, EDfNotExists);
+
+        let coin_types_vector = df::borrow_mut(&mut config.id, AllowedQuoteCoinTypesFieldName);
+        let (element_exists, index) = vector::index_of(coin_types_vector, &coin_type);
+
+        if(element_exists) {
+            vector::remove(coin_types_vector, index);
+        };
+    }
+
+    public fun assert_quote_asset_is_allowed_for_limit_order(config: &Config, coin_type: TypeName) {
+        let df_exists = df::exists_(&config.id, AllowedQuoteCoinTypesFieldName);
+        assert!(df_exists, EDfNotExists);
+
+        let coin_types_vector = df::borrow(&config.id, AllowedQuoteCoinTypesFieldName);
+        let (element_exists, _) = vector::index_of(coin_types_vector, &coin_type);
+
+        assert!(element_exists, EQuoteAssetNotAllowedForLimitOrder);
     }
 }

@@ -1,4 +1,5 @@
 module insidex_trade::limit_orders {
+    use std::type_name;
     use sui::balance::{Self, Balance};
     use sui::coin::{Self, Coin};
     use sui::clock::{Self, Clock};
@@ -6,6 +7,7 @@ module insidex_trade::limit_orders {
     use insidex_trade::safe_math;
 
     const ELimitOrderNotBelongsToUser: u64 = 1;
+    const EInvalidPricesForCreatingLimitOrder: u64 = 2;
     const ELimitOrderUserAndPromiseMismatch: u64 = 3;
     const ELimitOrderIdAndPromiseMismatch: u64 = 4;
     const ELimitBuyPriceNotExists: u64 = 5;
@@ -14,6 +16,9 @@ module insidex_trade::limit_orders {
     const ELimitBuyOutputNotEnough: u64 = 8;
     const ETakeProfitOutputNotEnough: u64 = 9;
     const EStopLossOutputNotEnough: u64 = 10;
+
+    const SlippageScaling: u64 = 10000;
+    const PriceScaling: u64 = 1000000000;
 
     // Base Asset -> Meme coin to buy or sell at limit price, Quote Asset -> Sui or USDC only
     public struct InsidexLimitOrder<phantom BaseAsset, phantom QuoteAsset> has key {
@@ -63,8 +68,23 @@ module insidex_trade::limit_orders {
         trade_config: &Config,
         clock: &Clock,
         ctx: &mut TxContext
-    ) {
+    ): ID {
         config::assert_interacting_with_most_up_to_date_package(trade_config);
+        config::assert_quote_asset_is_allowed_for_limit_order(trade_config, type_name::get<QuoteAsset>());
+
+        let target_price_limit_buy_value = option::get_with_default(&target_price_limit_buy, 0);
+        let target_price_take_profit_value = option::get_with_default(&target_price_take_profit, 0);
+        let target_price_stop_loss_value = option::get_with_default(&target_price_stop_loss, 0);
+
+        // Check that if limi_buy not exists, tp or sl should exists and vice-versa
+        // Also a check that prices cannot be 0
+        if (target_price_take_profit_value == 0 && target_price_stop_loss_value == 0) {
+            assert!(target_price_limit_buy_value != 0, EInvalidPricesForCreatingLimitOrder);
+        };
+
+        if (target_price_limit_buy_value == 0) {
+            assert!(target_price_take_profit_value != 0 || target_price_stop_loss_value != 0, EInvalidPricesForCreatingLimitOrder);
+        };
 
         let limit_order = InsidexLimitOrder<BaseAsset, QuoteAsset> {
             id: object::new(ctx),
@@ -79,7 +99,10 @@ module insidex_trade::limit_orders {
             updated_at: clock::timestamp_ms(clock),
         };
 
+        let limit_order_id = object::id(&limit_order);
         transfer::share_object(limit_order);
+
+        limit_order_id
     }
 
     public(package) fun update_limit_order<BaseAsset, QuoteAsset>(
@@ -88,38 +111,42 @@ module insidex_trade::limit_orders {
         target_price_take_profit: Option<u64>,
         target_price_stop_loss: Option<u64>,
         trade_config: &Config,
-        clock: &Clock,
-        ctx: &TxContext
-    ) {
+        clock: &Clock
+    ): (u64, u64, u64) {
         config::assert_interacting_with_most_up_to_date_package(trade_config);
-        assert_limit_order_belongs_to_user<BaseAsset, QuoteAsset>(limit_order, tx_context::sender(ctx));
 
-        if (option::is_some(target_price_limit_buy)) {
+        if (option::is_some(&target_price_limit_buy)) {
             limit_order.target_price_limit_buy = target_price_limit_buy;
-        }
+        };
 
-        if (option::is_some(target_price_take_profit)) {
+        if (option::is_some(&target_price_take_profit)) {
             limit_order.target_price_take_profit = target_price_take_profit;
-        }
+        };
 
-        if (option::is_some(target_price_stop_loss)) {
+        if (option::is_some(&target_price_stop_loss)) {
             limit_order.target_price_stop_loss = target_price_stop_loss;
-        }
+        };
 
         limit_order.updated_at = clock::timestamp_ms(clock);
+
+        (
+            option::get_with_default(&limit_order.target_price_limit_buy, 0),
+            option::get_with_default(&limit_order.target_price_take_profit, 0),
+            option::get_with_default(&limit_order.target_price_stop_loss, 0),
+        )
     }
 
     public(package) fun cancel_limit_order<BaseAsset, QuoteAsset>(
         limit_order: InsidexLimitOrder<BaseAsset, QuoteAsset>,
         trade_config: &Config,
         ctx: &mut TxContext
-    ) {
+    ): (Coin<BaseAsset>, Coin<QuoteAsset>) {
         config::assert_interacting_with_most_up_to_date_package(trade_config);
         assert_limit_order_belongs_to_user<BaseAsset, QuoteAsset>(&limit_order, tx_context::sender(ctx));
 
         let InsidexLimitOrder {
             id,
-            user,
+            user: _user,
             slippage: _slippage,
             balance_base,
             balance_quote,
@@ -132,11 +159,11 @@ module insidex_trade::limit_orders {
 
         let coin_base = coin::from_balance(balance_base, ctx);
         let coin_quote = coin::from_balance(balance_quote, ctx);
-        transfer::public_transfer(coin_base, user);
-        transfer::public_transfer(coin_quote, user);
 
         // Delete the object
         id.delete();
+
+        (coin_base, coin_quote)
     }
 
     public(package) fun borrow_asset_to_execute_order<BaseAsset, QuoteAsset>(
@@ -171,7 +198,7 @@ module insidex_trade::limit_orders {
             assert!(target_price_limit_buy_exists == true, ELimitBuyPriceNotExists);
 
             let limit_price_value = option::extract(target_price_limit_buy);
-            min_amount_to_repay = safe_math::safe_mul_div_u64(balance_quote_value, 10000 - slippage, 10000 * limit_price_value)
+            min_amount_to_repay = safe_math::safe_mul_div_u64(balance_quote_value, PriceScaling * (SlippageScaling - slippage), SlippageScaling * limit_price_value)
         };
 
         // If the trade was of type take profit
@@ -182,7 +209,7 @@ module insidex_trade::limit_orders {
             assert!(target_price_take_profit_exists == true, ETakeProfitPriceNotExists);
 
             let limit_price_value = option::extract(target_price_take_profit);
-            min_amount_to_repay = safe_math::safe_mul_div_u64(balance_base_value, limit_price_value * (10000 - slippage), 10000);
+            min_amount_to_repay = safe_math::safe_mul_div_u64(balance_base_value, limit_price_value * (10000 - slippage), 10000 * PriceScaling);
         };
 
         // If the trade was of type stop loss
@@ -193,7 +220,7 @@ module insidex_trade::limit_orders {
             assert!(target_price_stop_loss_exists == true, EStopLossPriceNotExists);
 
             let limit_price_value = option::extract(target_price_stop_loss);
-            min_amount_to_repay = safe_math::safe_mul_div_u64(balance_base_value, limit_price_value * (10000 - slippage), 10000);
+            min_amount_to_repay = safe_math::safe_mul_div_u64(balance_base_value, limit_price_value * (10000 - slippage), 10000 * PriceScaling);
         };
 
         let promise = Promise {
@@ -212,9 +239,11 @@ module insidex_trade::limit_orders {
         coin_base: Coin<BaseAsset>,
         coin_quote: Coin<QuoteAsset>,
         promise: Promise,
+        base_decimals: u64,
+        quote_decimals: u64,
         trade_config: &Config,
         ctx: &mut TxContext
-    ) {
+    ): (Coin<BaseAsset>, Coin<QuoteAsset>, Coin<BaseAsset>, Coin<QuoteAsset>, u64, u64, u64, address, ID, u8, u64) {
         config::assert_interacting_with_most_up_to_date_package(trade_config);
         config::assert_address_is_trading_manager(trading_manager_cap, trade_config, ctx);
 
@@ -231,16 +260,19 @@ module insidex_trade::limit_orders {
         let coin_base_value = coin::value(&coin_base);
         let coin_quote_value = coin::value(&coin_quote);
 
+        let scaled_coin_base_value = safe_math::safe_mul_div_u64(coin_base_value, quote_decimals, base_decimals);
+        let scaled_coin_quote_value = safe_math::safe_mul_div_u64(coin_quote_value, base_decimals, quote_decimals);
+
         if (trade_type == 1) {
-            assert!(coin_base_value >= min_amount_to_repay, ELimitBuyOutputNotEnough);
+            assert!(scaled_coin_base_value >= min_amount_to_repay, ELimitBuyOutputNotEnough);
         };
 
         if (trade_type == 2) {
-            assert!(coin_quote_value >= min_amount_to_repay, ETakeProfitOutputNotEnough);
+            assert!(scaled_coin_quote_value >= min_amount_to_repay, ETakeProfitOutputNotEnough);
         };
 
         if (trade_type == 3) {
-            assert!(coin_quote_value >= min_amount_to_repay, EStopLossOutputNotEnough);
+            assert!(scaled_coin_quote_value >= min_amount_to_repay, EStopLossOutputNotEnough);
         };
 
         let InsidexLimitOrder {
@@ -249,9 +281,9 @@ module insidex_trade::limit_orders {
             slippage: _slippage,
             balance_base,
             balance_quote,
-            target_price_limit_buy: _target_price_limit_buy,
-            target_price_take_profit: _target_price_take_profit,
-            target_price_stop_loss: _target_price_stop_loss,
+            target_price_limit_buy,
+            target_price_take_profit,
+            target_price_stop_loss,
             created_at: _created_at,
             updated_at: _updated_at,
         } = limit_order;
@@ -262,9 +294,18 @@ module insidex_trade::limit_orders {
         // Delete the limit order object
         id.delete();
 
-        transfer::public_transfer(coin_base, user);
-        transfer::public_transfer(coin_quote, user);
-        transfer::public_transfer(remaining_base_asset, user);
-        transfer::public_transfer(remaining_quote_asset, user);
+        (
+            coin_base,
+            coin_quote,
+            remaining_base_asset,
+            remaining_quote_asset,
+            option::get_with_default(&target_price_limit_buy, 0), 
+            option::get_with_default(&target_price_take_profit, 0), 
+            option::get_with_default(&target_price_stop_loss, 0),
+            user,
+            limit_order_id,
+            trade_type,
+            min_amount_to_repay
+        )
     }
 }

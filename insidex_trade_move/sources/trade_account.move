@@ -156,4 +156,30 @@ module insidex_trade::trade_account {
 
         deposit_existing_asset<C>(coin, trade_asset, trade_config);
     }
+
+    public(package) fun borrow_asset_to_place_limit_order<C>(
+        trading_manager_cap: &TradingManagerCap,
+        trade_asset: &mut TradeAsset<C>, 
+        amount: u64, 
+        user_address: address, 
+        trade_config: &Config, 
+        ctx: &mut TxContext
+    ): Coin<C> {
+        config::assert_interacting_with_most_up_to_date_package(trade_config);
+        config::assert_address_is_trading_manager(trading_manager_cap, trade_config, ctx);
+
+        assert_trade_asset_belongs_to_user<C>(user_address, trade_asset);
+
+        let asset_balance = &mut trade_asset.balance;
+        let asset_balance_value = balance::value(asset_balance);
+
+        // Assert that amount is less than or equal to asset_balance_value
+        assert!(amount <= asset_balance_value, EAmountMoreThanAssetBalance);
+
+        // Split the required balance
+        let required_balance = balance::split(asset_balance, amount);
+        let coin_to_return = coin::from_balance(required_balance, ctx);
+
+        coin_to_return
+    }
 }
