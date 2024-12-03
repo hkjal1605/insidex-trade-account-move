@@ -1,6 +1,6 @@
 module insidex_trade::config {
     use sui::types;
-    use std::type_name::{TypeName};
+    use std::type_name::{Self, TypeName};
     use sui::dynamic_field::{Self as df};
     
     use insidex_trade::app::{AdminCap};
@@ -86,6 +86,22 @@ module insidex_trade::config {
         vector::push_back(coin_types_vector, coin_type);
     }
 
+    public fun add_allowed_quote_asset_for_limit_order_v2<T>(
+        _admin_cap: &AdminCap,
+        config: &mut Config
+    ) {
+        assert_interacting_with_most_up_to_date_package(config);
+
+        let df_exists = df::exists_(&config.id, AllowedQuoteCoinTypesFieldName);
+
+        if(!df_exists) {
+            df::add(&mut config.id, AllowedQuoteCoinTypesFieldName, vector::empty<TypeName>());
+        };
+
+        let coin_types_vector = df::borrow_mut(&mut config.id, AllowedQuoteCoinTypesFieldName);
+        vector::push_back(coin_types_vector, type_name::get<T>());
+    }
+
     public fun remove_allowed_quote_asset_for_limit_order(
         _admin_cap: &AdminCap,
         config: &mut Config,
@@ -95,6 +111,25 @@ module insidex_trade::config {
 
         let df_exists = df::exists_(&config.id, AllowedQuoteCoinTypesFieldName);
         assert!(df_exists, EDfNotExists);
+
+        let coin_types_vector = df::borrow_mut(&mut config.id, AllowedQuoteCoinTypesFieldName);
+        let (element_exists, index) = vector::index_of(coin_types_vector, &coin_type);
+
+        if(element_exists) {
+            vector::remove(coin_types_vector, index);
+        };
+    }
+
+    public fun remove_allowed_quote_asset_for_limit_order_v2<T>(
+        _admin_cap: &AdminCap,
+        config: &mut Config
+    ) {
+        assert_interacting_with_most_up_to_date_package(config);
+
+        let df_exists = df::exists_(&config.id, AllowedQuoteCoinTypesFieldName);
+        assert!(df_exists, EDfNotExists);
+
+        let coin_type = type_name::get<T>();
 
         let coin_types_vector = df::borrow_mut(&mut config.id, AllowedQuoteCoinTypesFieldName);
         let (element_exists, index) = vector::index_of(coin_types_vector, &coin_type);
